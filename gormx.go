@@ -38,15 +38,15 @@ type Gormx interface {
 	// Close the underlying sql connection.
 	Close() error
 	// Begin a new transaction.
-	Beginx() *gorm.DB
+	Beginx() *gormx
 	// Begin a new transaction using the provided context and options.
 	// Note that the provided parameters are only used when opening a new transaction,
 	// not on nested ones.
-	BeginTxx(ctx context.Context) *gorm.DB
+	BeginTxx(ctx context.Context) *gormx
 	// Rollback the associated transaction.
-	Rollback() error
+	Rollbackx() error
 	// Commit the assiociated transaction.
-	Commit() error
+	Commitx() error
 	// Gorm returns the underlying Gorm DB.
 	Gorm() *gorm.DB
 	// Tx returns the underlying transaction.
@@ -60,8 +60,8 @@ func New(gorm *gorm.DB) (Gormx, error) {
 	}
 
 	gormx := &gormx{
-		gorm,
 		nil,
+		gorm,
 		[]string{},
 		true,
 		0,
@@ -99,7 +99,7 @@ func Connect(dataSourceName string, config *gorm.Config) (Gormx, error) {
 
 type gormx struct {
 	*gorm.DB
-	tx               *gorm.DB
+	db               *gorm.DB
 	savePointIDs     []string
 	savePointEnabled bool
 	transactionCount int
@@ -107,11 +107,11 @@ type gormx struct {
 }
 
 func (g *gormx) Ping() error {
-	if g.DB == nil {
+	if g.db == nil {
 		return ErrInvalidGormDB
 	}
 
-	db, err := g.DB.DB()
+	db, err := g.db.DB()
 	if err != nil {
 		return err
 	}
@@ -124,11 +124,11 @@ func (g *gormx) Close() error {
 	var db *sql.DB
 	var err error
 
-	if g.DB == nil {
+	if g.db == nil {
 		return ErrInvalidGormDB
 	}
 
-	db, err = g.DB.DB()
+	db, err = g.db.DB()
 	if err != nil {
 		return err
 	}
@@ -142,16 +142,16 @@ func (g *gormx) Close() error {
 }
 
 // Creates a new transaction with a background context
-func (g *gormx) Beginx() *gorm.DB {
+func (g *gormx) Beginx() *gormx {
 	return g.BeginTxx(context.Background())
 }
 
 // Creates a new transaction with a context
-func (g *gormx) BeginTxx(ctx context.Context) *gorm.DB {
-	if g.tx == nil {
+func (g *gormx) BeginTxx(ctx context.Context) *gormx {
+	if g.DB == nil {
 		// new actual transaction
-		db := g.DB.WithContext(ctx)
-		g.tx = db.Begin()
+		db := g.db.WithContext(ctx)
+		g.DB = db.Begin()
 	}
 
 	g.transactionCount += 1
@@ -159,15 +159,15 @@ func (g *gormx) BeginTxx(ctx context.Context) *gorm.DB {
 	// savepoints name must start with a char and cannot contain dashes (-)
 	savePointID := "sp_" + strings.Replace(uuids.Hex128(), "-", "_", -1)
 	g.savePointIDs = append(g.savePointIDs, savePointID)
-	g.tx = g.tx.SavePoint(savePointID)
+	g.DB = g.SavePoint(savePointID)
 
-	return g.tx
+	return g
 }
 
 // Rollback the transaction to a prior save point, or rollback the whole transaction
 // all together if it is at the top level
-func (g *gormx) Rollback() error {
-	if g.tx == nil {
+func (g *gormx) Rollbackx() error {
+	if g.DB == nil {
 		return ErrNotInTransaction
 	}
 
@@ -177,20 +177,20 @@ func (g *gormx) Rollback() error {
 	// just rollback to the previous level
 	if g.transactionCount != g.commitCount {
 		savePointID := g.savePointIDs[len(g.savePointIDs)-1]
-		g.tx = g.tx.RollbackTo(savePointID)
+		g.DB = g.RollbackTo(savePointID)
 		g.savePointIDs = g.savePointIDs[:len(g.savePointIDs)-1]
 		return nil
 	}
 
-	g.tx.Rollback()
-	g.tx = nil
+	g.DB = g.Rollback()
+	g.DB = nil
 	return nil
 }
 
-// Commits the transaction, or commit the whole transaction all together
+// Commit the transaction to a new save point, or commit the whole transaction all together
 // if it is at the number of nested transaction and commit count is equal
-func (g *gormx) Commit() error {
-	if g.tx == nil {
+func (g *gormx) Commitx() error {
+	if g.DB == nil {
 		return ErrNotInTransaction
 	}
 
@@ -202,17 +202,17 @@ func (g *gormx) Commit() error {
 		return nil
 	}
 
-	g.tx.Commit()
-	g.tx = nil
+	g.Commit()
+	g.DB = nil
 	return nil
 }
 
 // Gorm returns the underlying gorm db.
 func (g *gormx) Gorm() *gorm.DB {
-	return g.DB
+	return g.db
 }
 
 // Tx returns the underlying transaction.
 func (g *gormx) Tx() *gorm.DB {
-	return g.tx
+	return g.DB
 }

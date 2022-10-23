@@ -1,6 +1,7 @@
 package gormx_test
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"testing"
@@ -34,9 +35,9 @@ func createConnection(t *testing.T) *gorm.DB {
 		&models.T3{},
 	)
 
-	db.Raw("truncate t1")
-	db.Raw("truncate t2")
-	db.Raw("truncate t3")
+	db.Exec("truncate t1")
+	db.Exec("truncate t2")
+	db.Exec("truncate t3")
 
 	return db
 }
@@ -215,7 +216,7 @@ func TestGormx_Close(t *testing.T) {
 				g.Close()
 			},
 			assertions: func(err error) {
-				assert.Error(err)
+				assert.NoError(err)
 			},
 		},
 	}
@@ -231,5 +232,206 @@ func TestGormx_Close(t *testing.T) {
 			err := gx.Close()
 			tc.assertions(err)
 		})
+	}
+}
+
+type T1 struct {
+	ID string `json:"id" db:"id"`
+}
+
+type T2 struct {
+	ID string `json:"id" db:"id"`
+}
+
+type T3 struct {
+	ID string `json:"id" db:"id"`
+}
+
+func TestSingleCommit(t *testing.T) {
+	db := createConnection(t)
+	gx, _ := gormx.New(db)
+	defer gx.Close()
+
+	ctx := context.Background()
+
+	txService := gx.BeginTxx(ctx)
+
+	tx1 := gx.BeginTxx(ctx)
+	tx1.Exec("INSERT INTO t1(id) VALUES('abc')")
+	tx1.Commitx()
+
+	txService.Commitx()
+
+	var t1s []T1
+	gx.Gorm().Find(&t1s)
+
+	for _, t1 := range t1s {
+		assert.Equal(t, "abc", t1.ID)
+	}
+
+	if len(t1s) == 0 {
+		t.Errorf("commit didn't work")
+	}
+}
+
+func TestSingleRollback(t *testing.T) {
+	db := createConnection(t)
+	gx, _ := gormx.New(db)
+	defer gx.Close()
+
+	ctx := context.Background()
+
+	txService := gx.BeginTxx(ctx)
+
+	tx1 := gx.BeginTxx(ctx)
+	tx1.Exec("INSERT INTO t1(id) VALUES('abc')")
+	tx1.Rollback()
+
+	txService.Commitx()
+
+	var t1s []T1
+	gx.Gorm().Find(&t1s)
+
+	for _, t1 := range t1s {
+		assert.Equal(t, "abc", t1.ID)
+	}
+
+	if len(t1s) != 0 {
+		t.Errorf("rollback didn't work")
+	}
+}
+
+func TestSingleCommitAndSingleRollback(t *testing.T) {
+	db := createConnection(t)
+	gx, _ := gormx.New(db)
+	defer gx.Close()
+
+	fmt.Println("")
+
+	ctx := context.Background()
+
+	gx.BeginTxx(ctx)
+
+	tx1 := gx.BeginTxx(ctx)
+	tx1.Exec("INSERT INTO t1(id) VALUES('abc')")
+	gx.Commitx()
+
+	tx2 := gx.BeginTxx(ctx)
+	fmt.Println(tx2)
+	tx2.Exec("INSERT INTO t2(id) VALUES('abc')")
+	gx.Rollbackx()
+
+	gx.Commitx()
+
+	var t1s []T1
+	gx.Gorm().Find(&t1s)
+
+	for _, t1 := range t1s {
+		assert.Equal(t, "abc", t1.ID)
+	}
+
+	if len(t1s) == 0 {
+		t.Errorf("commit didn't work")
+	}
+
+	var t2s []T2
+	gx.Gorm().Find(&t2s)
+
+	for _, t2 := range t2s {
+		assert.Equal(t, "abc", t2.ID)
+	}
+
+	if len(t2s) != 0 {
+		t.Errorf("rollback didn't work")
+	}
+}
+
+func TestDoubleCommitAndSingleRollback(t *testing.T) {
+	db := createConnection(t)
+	gx, _ := gormx.New(db)
+	defer gx.Close()
+
+	ctx := context.Background()
+
+	txService := gx.BeginTxx(ctx)
+
+	tx1 := gx.BeginTxx(ctx)
+	tx1.Exec("INSERT INTO t1(id) VALUES('abc')")
+	tx1.Commitx()
+
+	tx2 := gx.BeginTxx(ctx)
+	tx2.Exec("INSERT INTO t2(id) VALUES('abc')")
+	tx2.Commitx()
+
+	tx3 := gx.BeginTxx(ctx)
+	tx3.Exec("INSERT INTO t3(id) VALUES('abc')")
+	tx3.Rollbackx()
+
+	txService.Commitx()
+
+	var t1s []T1
+	gx.Gorm().Find(&t1s)
+
+	if len(t1s) == 0 {
+		t.Errorf("commit didn't work")
+	}
+
+	var t2s []T2
+	gx.Gorm().Find(&t2s)
+
+	if len(t2s) == 0 {
+		t.Errorf("commit didn't work")
+	}
+
+	var t3s []T3
+	gx.Gorm().Find(&t3s)
+
+	if len(t3s) != 0 {
+		t.Errorf("rollback didn't work")
+	}
+}
+
+func TestDoubleCommitAndSingleRollbackAndAllRollback(t *testing.T) {
+	db := createConnection(t)
+	gx, _ := gormx.New(db)
+	defer gx.Close()
+
+	ctx := context.Background()
+
+	txService := gx.BeginTxx(ctx)
+
+	tx1 := gx.BeginTxx(ctx)
+	tx1.Exec("INSERT INTO t1(id) VALUES('abc')")
+	tx1.Commitx()
+
+	tx2 := gx.BeginTxx(ctx)
+	tx2.Exec("INSERT INTO t2(id) VALUES('abc')")
+	tx2.Commitx()
+
+	tx3 := gx.BeginTxx(ctx)
+	tx3.Exec("INSERT INTO t3(id) VALUES('abc')")
+	tx3.Rollbackx()
+
+	txService.Rollbackx()
+
+	var t1s []T1
+	gx.Gorm().Find(&t1s)
+
+	if len(t1s) != 0 {
+		t.Errorf("rollback didn't work")
+	}
+
+	var t2s []T2
+	gx.Gorm().Find(&t2s)
+
+	if len(t2s) != 0 {
+		t.Errorf("rollback didn't work")
+	}
+
+	var t3s []T3
+	gx.Gorm().Find(&t3s)
+
+	if len(t3s) != 0 {
+		t.Errorf("rollback didn't work")
 	}
 }
